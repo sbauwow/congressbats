@@ -125,6 +125,14 @@ h1 {
   color: var(--amber-soft);
 }
 .banner.off { color: var(--muted); }
+.banner.lull {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 178, 74, 0.22);
+  color: var(--amber-soft);
+}
+
+/* what-shifts-the-time */
+.factors { margin-top: 2.25rem; }
 
 /* week */
 .nights { list-style: none; }
@@ -221,5 +229,6 @@ h1 {
 
 /* footer */
 footer { margin-top: 2.5rem; color: var(--muted); font-size: 0.85rem; line-height: 1.55; }
+footer a { color: var(--amber-soft); }
 footer p + p { margin-top: 0.7rem; }
 .fine { font-size: 0.78rem; opacity: 0.8; }

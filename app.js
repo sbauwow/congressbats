@@ -12,10 +12,11 @@ const SUBMIT_URL = "https://script.google.com/macros/s/AKfycbyHWLwTeOSx15PvWiB5X
 
 // Mexican free-tailed bats are in residence ~mid-March through early November,
 // then migrate to Mexico for winter. Dates are approximate (weather-dependent).
-const SEASON_START = { m: 2, d: 11 }; // Mar 11  (month is 0-indexed)
-const SEASON_END = { m: 10, d: 5 };   // Nov 5
-const PEAK_START = { m: 6, d: 15 };   // mid-Jul
-const PEAK_END = { m: 8, d: 20 };     // mid-Sep  (pups flying — best viewing)
+const SEASON_START = { m: 2, d: 11 }; // ~Mar 11 (a few scouts return as early as late Feb)
+const SEASON_END = { m: 10, d: 30 };  // ~Nov 30 (fall migration runs into late Nov / Dec)
+// Pup-rearing lull (Austin Bat Refuge): smaller, later, delayed emergences.
+const PUP_START = { m: 4, d: 20 };    // ~May 20
+const PUP_END = { m: 6, d: 15 };      // ~Jul 15
 
 // ── sunset (NOAA / Wikipedia "sunrise equation") ─────────────────────────────
 // Returns a UTC Date for sunset on the given calendar date at lat/lon, or null
@@ -41,20 +42,21 @@ function sunsetUTC(year, month0, day, lat, lon) {
 }
 
 // ── seasonal emergence offset (minutes after sunset) ─────────────────────────
-// Heuristic, anchored to a real sighting: on 2026-06-11 (doy 162) the colony had
-// not emerged by 9:00 PM with sunset at 8:32 PM — i.e. >+28 min after sunset in
-// mid-June. So at Congress Ave the bats emerge *after* sunset all season (the
-// before-sunset daylight exits belong to Bracken Cave), earliest near the August
-// pup-season peak when the colony is largest. Gaussian dip: ~+38 min at the
-// season edges, down to ~+8 min at peak.
+// Informed by Austin Bat Refuge's seasonal guidance + a local sighting. At
+// Congress Ave the bats emerge after sunset, between sunset and dark. During pup
+// season (late May–mid July) emergence is DELAYED and flights are small (moms
+// raising flightless pups); on the shoulder months (Mar–early May, late Jul–mid
+// Sept) they come out earlier, nearer sunset. Anchor: 2026-06-11 (doy 162) not
+// out by 9:00 PM with an 8:32 PM sunset → ~+30 min. Model: a hump centered on
+// mid-June (latest, ~+32 min) easing to ~+10 min on the shoulder months.
 const EARLY_MIN = 15;   // the likely window opens this many min before the estimate
 const LATE_MIN = 22;    // ...and closes this many min after it
 function seasonalOffsetMin(doy) {
-  const PEAK_DOY = 225;  // ~Aug 13
-  const EDGE = 38;       // minutes after sunset at the season edges
-  const DEPTH = 30;      // swing from edge toward the peak
-  const SIGMA = 39;      // days
-  return EDGE - DEPTH * Math.exp(-((doy - PEAK_DOY) ** 2) / (2 * SIGMA * SIGMA));
+  const PUP_PEAK = 170;  // ~mid-June — latest emergence of the year
+  const SHOULDER = 10;   // minutes after sunset on the shoulder months
+  const RISE = 22;       // extra delay added at the pup-season peak
+  const SIGMA = 30;      // days
+  return SHOULDER + RISE * Math.exp(-((doy - PUP_PEAK) ** 2) / (2 * SIGMA * SIGMA));
 }
 
 function dayOfYear(year, month0, day) {
@@ -69,9 +71,14 @@ function seasonStatus(year, month0, day) {
   const t = md(year, month0, day);
   const inSeason = t >= md(year, SEASON_START.m, SEASON_START.d)
                 && t <= md(year, SEASON_END.m, SEASON_END.d);
-  const inPeak = t >= md(year, PEAK_START.m, PEAK_START.d)
-              && t <= md(year, PEAK_END.m, PEAK_END.d);
-  return { inSeason, inPeak };
+  if (!inSeason) return { inSeason: false, state: "off" };
+  const inPup = t >= md(year, PUP_START.m, PUP_START.d)
+             && t <= md(year, PUP_END.m, PUP_END.d);
+  if (inPup) return { inSeason: true, state: "lull" };
+  // Prime viewing (Austin Bat Refuge): Mar 11–May 5 and Jul 25–Sep 15.
+  const prime = (t >= md(year, 2, 11) && t <= md(year, 4, 5))
+             || (t >= md(year, 6, 25) && t <= md(year, 8, 15));
+  return { inSeason: true, state: prime ? "prime" : "resident" };
 }
 
 // ── formatting (always Austin local, DST-correct via Intl) ───────────────────
@@ -92,14 +99,14 @@ function austinToday() {
 // ── projection for one night ──────────────────────────────────────────────────
 function projectNight(year, month0, day) {
   const sset = sunsetUTC(year, month0, day, LAT, LON);
-  const { inSeason, inPeak } = seasonStatus(year, month0, day);
+  const { inSeason, state } = seasonStatus(year, month0, day);
   const offset = seasonalOffsetMin(dayOfYear(year, month0, day));
   const emerge = sset ? new Date(sset.getTime() + offset * 60000) : null;
   const early = emerge ? new Date(emerge.getTime() - EARLY_MIN * 60000) : null;
   const late = emerge ? new Date(emerge.getTime() + LATE_MIN * 60000) : null;
   const dateUTC = new Date(md(year, month0, day));
   return { year, month0, day, dateUTC, sunset: sset, emerge, early, late,
-           offset, inSeason, inPeak };
+           offset, inSeason, state };
 }
 
 // Build a list of nights starting from Austin "today".
@@ -128,15 +135,18 @@ function render() {
 
   let bannerClass = "banner";
   let bannerText;
-  if (!tonight.inSeason) {
+  if (tonight.state === "off") {
     const t = tonight.dateUTC.getTime();
     const before = t < md(tonight.year, SEASON_START.m, SEASON_START.d);
     bannerText = before
-      ? "The bats are wintering in Mexico. Nightly flights resume in mid-March."
-      : "The bats have left for Mexico for the winter. They return in mid-March.";
+      ? "The bats are wintering in Mexico. Big nightly flights resume in spring — a few scouts return as early as late February."
+      : "The fall migration has passed. A small group overwinters here; the big nightly flights return in spring.";
     bannerClass += " off";
-  } else if (tonight.inPeak) {
-    bannerText = "Peak season — the colony is at its largest and emergences are most dramatic.";
+  } else if (tonight.state === "lull") {
+    bannerText = "Pup season — moms are raising pups that can't fly yet, so emergences are smaller and come later, often after dark. Numbers build back up by late July.";
+    bannerClass += " lull";
+  } else if (tonight.state === "prime") {
+    bannerText = "Prime viewing — strong, fairly early emergences right now. Clear, calm evenings are best.";
     bannerClass += " peak";
   } else {
     bannerText = "Bats are in residence. Clear, calm evenings give the best flights.";
@@ -178,6 +188,20 @@ function render() {
       <ul class="nights">${rows}</ul>
     </section>
 
+    <section class="factors">
+      <div class="label">What shifts the time</div>
+      <ul class="facts">
+        <li><b>Warm wind out of the north</b> can bring them out up to
+          <b>30 minutes earlier</b> than projected.</li>
+        <li><b>Cold below 60&deg;F, gusty non-northerly wind, or a good chance of
+          rain</b> push the flight later or thin it out.</li>
+        <li>A bright <b>waxing-to-full moon</b> tends to delay and scatter the
+          emergence.</li>
+        <li>After a rain, a glut of insects can keep them feeding and flying
+          closer to dark.</li>
+      </ul>
+    </section>
+
     <section class="report">
       <div class="label">Saw them fly? Help the forecast</div>
       <p class="report-intro">The projection is only a model. Tell us when the
@@ -213,9 +237,12 @@ function render() {
           at first; education turned them into a beloved attraction that now draws
           an estimated 100,000 visitors a year.</li>
         <li><b>It's a maternity colony.</b> Mostly females, arriving from central
-          Mexico in March. Each gives birth to a single pup around June; the pups
-          are flying by August, which is why late summer brings the biggest,
-          longest emergences.</li>
+          Mexico in spring. Pups are born from late May to mid-July and can't fly
+          at first — so early-summer flights run smaller and later. By late July
+          the young are on the wing and the emergences swell again.</li>
+        <li><b>Numbers swing wildly.</b> Maybe 80,000–100,000 overwinter, building
+          to well over a million by late summer; counts during the fall migration
+          have topped <b>1.5 million</b> bats in a single night.</li>
         <li><b>Serious appetites.</b> The colony eats an estimated 10,000+ pounds
           of insects every night, including crop pests like corn earworm moths —
           free pest control worth real money to Texas farmers.</li>
@@ -223,20 +250,24 @@ function render() {
           mammals in level flight — ground speeds over 100 mph have been recorded.
           They forage thousands of feet up and miles from the bridge, navigating
           by echolocation.</li>
-        <li><b>Gone by winter.</b> As nights cool in October and November they
-          migrate back to Mexico, returning the following spring.</li>
+        <li><b>Gone by winter.</b> Most migrate back to Mexico through October and
+          November; a small group overwinters, and the rest return in spring.</li>
       </ul>
-      <p class="watch"><b>Watching tips:</b> stand on the bridge sidewalks or the
-        lawn on the south-east bank. Come a bit before the projected time, keep
-        noise down, and skip the flash. Clear, calm evenings are best; cold or
-        rainy nights can delay or cancel the flight entirely.</p>
+      <p class="watch"><b>Watching tips:</b> when they emerge before dark, the top
+        of the bridge gives the best view; when they come out closer to dark, watch
+        from the south-east bank with the fading light behind them. Most of the
+        colony streams south, so the north side sees fewer. Come a bit before the
+        projected time, keep noise down, and skip the flash.</p>
     </section>
 
     <footer>
       <p>An estimate from sunset plus a seasonal offset, not a measured time.
          Real emergence shifts with weather, the colony's size, and the bats'
          own mood. Arrive ~30 minutes before for the best odds.</p>
-      <p class="fine">Times are Austin local (Central). Season dates approximate.</p>
+      <p class="fine">Times are Austin local (Central). Season dates approximate.
+        Seasonal &amp; weather guidance informed by
+        <a href="https://austinbatrefuge.org/congress-avenue-bridge/"
+           target="_blank" rel="noopener">Austin Bat Refuge</a>.</p>
     </footer>`;
 
   wireReportForm();
